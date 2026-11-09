@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Secure sign-up demo</title>
+<style>
+:root{--bg:#f4f6fb;--surface:#fff;--ink:#0f1a30;--muted:#566480;--line:#dbe1ee;--accent:#1f5eff;--on:#fff;--err:#c0262d;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#0b1322;--surface:#121c32;--ink:#e8edf6;--muted:#93a1ba;--line:#23304f;--accent:#6aa6ff;--on:#071226;--err:#f87171;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,sans-serif;display:grid;place-items:start center;padding:40px 16px}
+main{width:min(440px,100%)}
+h1{font-size:28px;margin:0 0 6px;letter-spacing:-.02em}
+.note{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 14px;color:var(--muted);font-size:14px;margin:12px 0 20px}
+section{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px}
+h2{font-size:20px;margin:0 0 14px}
+label{display:block;font-size:14px;color:var(--muted);margin-bottom:10px}
+input{display:block;width:100%;margin-top:4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{padding:10px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;cursor:pointer}
+button.p{background:var(--accent);color:var(--on);border-color:var(--accent);font-weight:600}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.link{border:0;background:none;color:var(--accent);padding:0}
+#msg{min-height:24px;margin:12px 0 0;font-size:14px}
+#msg.err{color:var(--err)}
+dl{margin:0 0 16px}dt{font-size:13px;color:var(--muted)}dd{margin:0 0 10px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Secure sign-up demo</h1>
+  <div class="note">This is a demo. Please don’t use real personal data. Accounts are deleted automatically 24 hours after they are created.</div>
+
+  <section id="register">
+    <h2>Create account</h2>
+    <form id="fReg">
+      <div class="two">
+        <label>First name<input name="first_name" required maxlength="50" autocomplete="given-name"></label>
+        <label>Last name<input name="last_name" required maxlength="50" autocomplete="family-name"></label>
+      </div>
+      <label>Phone number<input name="phone" required placeholder="+639171234567" autocomplete="tel"></label>
+      <label>Email<input name="email" type="email" required autocomplete="email"></label>
+      <label>Confirm email<input name="email_confirm" type="email" required autocomplete="off"></label>
+      <div class="row"><button class="p">Create account</button><button type="button" class="link" data-go="login">I already have an account</button></div>
+    </form>
+  </section>
+
+  <section id="login" hidden>
+    <h2>Log in</h2>
+    <form id="fLogin">
+      <label>Email<input name="email" type="email" required autocomplete="email"></label>
+      <div class="row"><button class="p">Send me a code</button><button type="button" class="link" data-go="register">Create an account</button></div>
+    </form>
+  </section>
+
+  <section id="code" hidden>
+    <h2>Enter your code</h2>
+    <p class="note" id="codeHint"></p>
+    <form id="fCode">
+      <label>6-digit code<input name="code" required inputmode="numeric" pattern="\d{6}" maxlength="6" autocomplete="one-time-code"></label>
+      <div class="row"><button class="p">Verify</button><button type="button" class="link" data-go="login">Start over</button></div>
+    </form>
+  </section>
+
+  <section id="dash" hidden>
+    <h2>Dashboard</h2>
+    <dl>
+      <dt>Name</dt><dd id="dName"></dd>
+      <dt>Email</dt><dd id="dEmail"></dd>
+      <dt>Phone</dt><dd id="dPhone"></dd>
+      <dt>Account is deleted in</dt><dd id="dLeft"></dd>
+    </dl>
+    <button id="logout" class="p">Log out</button>
+  </section>
+  <p id="msg" role="status"></p>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+let pending = { email: "", mode: "" }, timer;
+
+function show(id) {
+  document.querySelectorAll("section").forEach((s) => (s.hidden = s.id !== id));
+  say("");
+}
+function say(text, err) { const m = $("#msg"); m.textContent = text; m.className = err ? "err" : ""; }
+
+async function api(path, body, method = "POST") {
+  const r = await fetch("/api/" + path, { method, headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  let d = {};
+  try { d = await r.json(); } catch {}
+  if (!r.ok) {
+    const m = Array.isArray(d.detail) ? d.detail.map((x) => x.msg.replace(/^Value error, /, "")).join(". ") : d.detail;
+    throw new Error(m || "Something went wrong. Try again.");
+  }
+  return d;
+}
+const data = (f) => Object.fromEntries(new FormData(f));
+
+document.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => show(b.dataset.go)));
+
+$("#fReg").onsubmit = async (e) => {
+  e.preventDefault();
+  const d = data(e.target);
+  if (d.email.trim().toLowerCase() !== d.email_confirm.trim().toLowerCase()) return say("The two email addresses do not match.", true);
+  try { await api("register", d); pending = { email: d.email, mode: "verify" }; ask(); } catch (x) { say(x.message, true); }
+};
+$("#fLogin").onsubmit = async (e) => {
+  e.preventDefault();
+  const d = data(e.target);
+  try { await api("login", d); pending = { email: d.email, mode: "login/verify" }; ask(); } catch (x) { say(x.message, true); }
+};
+function ask() {
+  $("#fCode").reset();
+  show("code");
+  $("#codeHint").textContent = "If " + pending.email + " can be used, we sent a 6-digit code. It expires in 5 minutes.";
+}
+$("#fCode").onsubmit = async (e) => {
+  e.preventDefault();
+  try { await api(pending.mode, { email: pending.email, code: data(e.target).code }); dashboard(); } catch (x) { say(x.message, true); }
+};
+async function dashboard() {
+  try {
+    const u = await api("me", null, "GET");
+    $("#dName").textContent = u.first_name + " " + u.last_name;
+    $("#dEmail").textContent = u.email;
+    $("#dPhone").textContent = u.phone;
+    let left = u.seconds_left;
+    clearInterval(timer);
+    const tick = () => { const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60; $("#dLeft").textContent = `${h}h ${m}m ${s}s`; if (left-- <= 0) location.reload(); };
+    tick(); timer = setInterval(tick, 1000);
+    show("dash");
+  } catch { show("register"); }
+}
+$("#logout").onclick = async () => { await api("logout").catch(() => {}); clearInterval(timer); show("login"); say("You are logged out."); };
+dashboard();
+</script>
+</body>
+</html>
